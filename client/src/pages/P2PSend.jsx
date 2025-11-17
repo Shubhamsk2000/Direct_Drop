@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { CheckCircle, FileUp, RefreshCw } from 'lucide-react';
 
 const P2PSend = () => {
-  const { socket, peerConnected, connected, setRoomId, roomId } = useSocket();
+  const { socket, peerConnected, connected, setRoomId, roomId, connectionError } = useSocket();
   const [dataChannel, setDataChannel] = useState(null);
   const [file, setFile] = useState(null);
   const [generatingCode, setGeneratingCode] = useState(false);
@@ -14,6 +14,16 @@ const P2PSend = () => {
   const fileInputRef = useRef(null);
 
   const peerConnection = useMemo(() => new RTCPeerConnection(), []);
+
+  useEffect(() => {
+    return () => {
+      try {
+        peerConnection.close();
+      } catch (error) {
+        console.log("Error closing peerConnection:", e);
+      }
+    };
+  }, [peerConnection]);
 
   const handleFileChange = (ev) => {
     const file = ev.target.files?.[0] || null;
@@ -27,13 +37,15 @@ const P2PSend = () => {
       fileInputRef.current.click();
     }
   };
+
   const handleCreateRoom = useCallback(() => {
+    if (!socket) return;
     if (roomId) return;
 
     setGeneratingCode(true);
     socket.emit('create-room');
-    console.log("room creating ")
-  }, [socket]);
+    console.log("room creating ");
+  }, [socket, roomId]);
 
   const onGeneratedCode = useCallback((arg) => {
     setRoomId(arg);
@@ -56,11 +68,25 @@ const P2PSend = () => {
     }
   }, []);
 
+  const handleReceiveICECaandidate = useCallback(async ({ candidate }) => {
+    try {
+      if (candidate) {
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (error) {
+      console.log(error.message);
+    }
+  }, [peerConnection]);
 
   useEffect(() => {
     if (!socket) return;
 
     socket.on('webrtc-offer', handleReceiveOffer);
+    socket.on('generated-code', onGeneratedCode);
+    socket.on('webrtc-ice-candidate', handleReceiveICECaandidate);
+    socket.on('peer-connected', () => {
+      console.log("connected to room");
+    });
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
@@ -79,31 +105,18 @@ const P2PSend = () => {
       setDataChannel(channel);
     }
 
-    const handleReceiveICECaandidate = async ({ candidate }) => {
-      try {
-        if (candidate) {
-          peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-      } catch (error) {
-        console.log(error.message);
-      }
-    };
-
-    socket.on('webrtc-ice-candidate', handleReceiveICECaandidate);
-    socket.on('generated-code', onGeneratedCode);
-    socket.on('peer-connected', () => {
-      console.log("connected to room");
-    })
     return () => {
       socket.off('webrtc-offer', handleReceiveOffer);
-      socket.off('generated-code');
-      socket.off('peer-connected');
+      socket.off('generated-code', onGeneratedCode);
       socket.off('webrtc-ice-candidate', handleReceiveICECaandidate);
+      socket.off('peer-connected', () => {
+        console.log("connected to room");
+      });
     }
-  }, [socket, peerConnection]);
+  }, [socket, peerConnection, handleReceiveOffer, onGeneratedCode, handleReceiveICECaandidate]);
 
   const handleSendFile = async () => {
-    if(transferState === 'sending') return;
+    if (transferState === 'sending') return;
     setTransferState('sending');
     setTransferProgress(0);
     try {
@@ -164,6 +177,7 @@ const P2PSend = () => {
           connected={connected}
           roomId={roomId}
           peerConnected={peerConnected}
+          connectionError={connectionError}
         />
 
         {

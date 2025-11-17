@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { CheckCircle, Download, Loader, XCircle, FileDown } from 'lucide-react';
 
 const P2PReceive = () => {
-  const { socket, peerConnected, connected, roomId, setRoomId } = useSocket();
+  const { socket, peerConnected, connected, roomId, setRoomId, connectionError } = useSocket();
 
   const [code, setCode] = useState("");
   const [joining, setJoining] = useState(false);
@@ -32,9 +32,11 @@ const P2PReceive = () => {
   // Join a room
   // -------------------------
   const handleJoinRoom = () => {
-    if (!connected || code.length !== 4) return;
+    if (!connected || code.length !== 4 || !socket) return;
+
     setJoining(true);
     socket.emit('join-room', code);
+
     setRoomId(code);
     setJoining(false);
   };
@@ -121,9 +123,18 @@ const P2PReceive = () => {
   // -------------------------
   // Handle WebRTC Answer
   // -------------------------
-  const handleOfferAnswer = useCallback(async ({ answer }) => {
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-  }, []);
+  const handleOfferAnswer = useCallback(
+    async ({ answer }) => {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    }, [peerConnection]);
+
+
+  const handleICE = useCallback(
+    async ({ candidate }) => {
+      if (candidate) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    }, [peerConnection]);
 
   // -------------------------
   // ICE Candidates, Listeners
@@ -131,24 +142,31 @@ const P2PReceive = () => {
   useEffect(() => {
     if (!socket) return;
 
+    socket.on("webrtc-ice-candidate", handleICE);
+    socket.on("webrtc-answer", handleOfferAnswer);
     socket.on("peer-connected", () => console.log("Receiver: Peer connected"));
 
     peerConnection.onicecandidate = (e) => {
       if (e.candidate) socket.emit("webrtc-ice-candidate", { candidate: e.candidate });
     };
 
-    const handleICE = ({ candidate }) => {
-      if (candidate) peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    };
-
-    socket.on("webrtc-answer", handleOfferAnswer);
-    socket.on("webrtc-ice-candidate", handleICE);
-
     return () => {
-      socket.off("webrtc-answer", handleOfferAnswer);
       socket.off("webrtc-ice-candidate", handleICE);
+      socket.off("webrtc-answer", handleOfferAnswer);
+      socket.off("peer-connected", () => console.log("Receiver: Peer connected"));
     };
   }, [socket]);
+
+
+  useEffect(() => {
+    return () => {
+      try {
+        peerConnection.close();
+      } catch (error) {
+        console.log("Error closing peerConnection:", e);
+      }
+    };
+  }, [peerConnection]);
 
   // -------------------------
   // UI
@@ -161,7 +179,12 @@ const P2PReceive = () => {
       </motion.div>
 
       <div className="card w-full p-4">
-        <ConnectionStatus connected={connected} roomId={roomId} peerConnected={peerConnected} />
+        <ConnectionStatus
+          connected={connected}
+          roomId={roomId}
+          peerConnected={peerConnected}
+          connectionError={connectionError}
+        />
 
         {/* Enter Code Screen */}
         {!roomId && (
