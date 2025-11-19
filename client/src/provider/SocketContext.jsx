@@ -1,4 +1,4 @@
-import { useContext, createContext, useEffect, useState, useMemo, useRef } from "react";
+import { useContext, createContext, useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { io } from 'socket.io-client';
 
 const SocketContext = createContext(null);
@@ -47,13 +47,16 @@ export const SocketProvider = ({ children }) => {
 
     const socket = socketRef.current;
 
-    const resetRoom = () => {
+    const resetRoom = useCallback(() => {
         setRoomId(null);
         setPeerConnected(false);
-    }
-    const clearError = () => {
         setConnectionError("");
-    }
+    }, []);
+    
+    const clearError = useCallback(() => {
+        setConnectionError("");
+    }, []);
+    
     const values = useMemo(() => ({
         socket,
         peerConnected,
@@ -63,7 +66,7 @@ export const SocketProvider = ({ children }) => {
         setRoomId,
         resetRoom,
         clearError,
-    }), [socket, connected, peerConnected, connectionError, roomId]);
+    }), [socket, connected, peerConnected, connectionError, roomId, resetRoom, clearError]);
 
     return (
         <SocketContext.Provider value={values}>

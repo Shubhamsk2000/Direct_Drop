@@ -16,6 +16,18 @@ export default function socketHanlder(io) {
         console.log('\nUser connected with id :' + socket.id);
 
         socket.on('create-room', () => {
+            // Clean up any existing room for this user
+            const existingCode = userToRoom.get(socket.id);
+            if (existingCode) {
+                const existingRoom = rooms.get(existingCode);
+                if (existingRoom && existingRoom.sender === socket.id) {
+                    socket.leave(existingCode);
+                    rooms.delete(existingCode);
+                    userToRoom.delete(socket.id);
+                    console.log(`Cleaned up existing room: ${existingCode}`);
+                }
+            }
+
             let code = generateCode();
             //add room code with there sender in the map
             rooms.set(code, {
@@ -78,6 +90,28 @@ export default function socketHanlder(io) {
 
         socket.on('disconnect', () => {
             console.log("User disconnected:", socket.id);
+            
+            // Clean up user's room
+            const code = userToRoom.get(socket.id);
+            if (code) {
+                const room = rooms.get(code);
+                if (room) {
+                    // Notify the other peer
+                    socket.broadcast.to(code).emit('peer-disconnected');
+                    
+                    // If user was sender, delete the room
+                    if (room.sender === socket.id) {
+                        rooms.delete(code);
+                        console.log(`Room ${code} deleted (sender left)`);
+                    } 
+                    // If user was receiver, just clear receiver
+                    else if (room.receiver === socket.id) {
+                        room.receiver = null;
+                        console.log(`Receiver left room ${code}`);
+                    }
+                }
+                userToRoom.delete(socket.id);
+            }
         });
 
     });
