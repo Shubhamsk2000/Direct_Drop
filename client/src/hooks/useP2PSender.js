@@ -1,28 +1,30 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createPeerConnection } from "../webrtc/createPeerConnection.js";
-import { sendFileOverDataChannel } from "../webrtc/fileSender.js";
+import sendFilesOverDataChannel from "../webrtc/fileSender.js";
 
 export function useP2PSender(socket, roomId) {
     const [pc, setPc] = useState(null);
     const [dataChannel, setDataChannel] = useState(null);
-    const [progress, setProgress] = useState(0);
     const [state, setState] = useState("idle");
-
+    
+    // Multi-file state
+    const [filesProgress, setFilesProgress] = useState([]);
+    const [currentFileIndex, setCurrentFileIndex] = useState(-1);
+    
     const pendingCandidatesRef = useRef([]);
 
     useEffect(() => {
         if (!socket || !roomId) {
-            // Clean up when roomId is cleared (reset)
             setPc(null);
             setDataChannel(null);
             setState("idle");
-            setProgress(0);
+            setFilesProgress([]);
+            setCurrentFileIndex(-1);
             return;
         }
 
-        console.log("Sender: Setting up peer connection for room:", roomId);
+        console.log("Sender: Setting up peer connection");
 
-        // Create Peer Connection
         const peer = createPeerConnection({
             onIceCandidate: (candidate) => {
                 socket.emit("webrtc-ice-candidate", { candidate });
@@ -37,25 +39,26 @@ export function useP2PSender(socket, roomId) {
             console.log("Sender: DataChannel OPEN");
             channel.bufferedAmountLowThreshold = 64 * 1024;
             setDataChannel(channel);
+            setState("ready");  // ✅ ADDED: Set state to ready
         };
 
         channel.onclose = () => {
             console.log("Sender: DataChannel CLOSED");
             setDataChannel(null);
+            setState("idle");
         };
 
         channel.onerror = (error) => {
             console.error("Sender: DataChannel ERROR", error);
+            setState("error");  // ✅ ADDED: Set error state
         };
 
-        // Listen for answer from receiver
         socket.on("webrtc-answer", async ({ answer }) => {
             try {
-                console.log("Sender: Received answer");
+                console.log("Sender: Received answer, setting remote description");
                 await peer.setRemoteDescription(answer);
-
-                // Process queued ICE candidates
-                console.log(`Sender: Processing ${pendingCandidatesRef.current.length} pending ICE candidates`);
+                
+                console.log(`Sender: Processing ${pendingCandidatesRef.current.length} queued ICE candidates`);
                 for (const candidate of pendingCandidatesRef.current) {
                     try {
                         await peer.addIceCandidate(candidate);
@@ -65,7 +68,7 @@ export function useP2PSender(socket, roomId) {
                 }
                 pendingCandidatesRef.current = [];
             } catch (error) {
-                console.error("Error setting remote description:", error);
+                console.error("Sender: Error setting remote description:", error);
             }
         });
 
@@ -94,7 +97,6 @@ export function useP2PSender(socket, roomId) {
         };
     }, [socket, roomId]);
 
-    // Create and send offer when peer connects
     useEffect(() => {
         if (!pc || !socket) return;
 
@@ -106,40 +108,64 @@ export function useP2PSender(socket, roomId) {
                 socket.emit("webrtc-offer", { offer });
                 console.log("Sender: Offer sent");
             } catch (error) {
-                console.error("Error creating offer:", error);
+                console.error("Sender: Error creating offer:", error);
             }
         };
 
         socket.on("peer-connected", createOffer);
-
-        return () => {
-            socket.off("peer-connected");
-        };
+        return () => socket.off("peer-connected", createOffer);
     }, [pc, socket]);
 
-    // SEND FILE
-    const sendFile = useCallback(async (file) => {
+    // Send multiple files
+    const sendFiles = useCallback(async (files) => {
         if (!dataChannel || dataChannel.readyState !== "open") {
-            console.log("Data channel not ready. State:", dataChannel?.readyState);
+            console.error("Data channel not ready. State:", dataChannel?.readyState);
             return;
         }
 
+        console.log(`Sending ${files.length} files`);
         setState("sending");
-        setProgress(0);
+        setCurrentFileIndex(0);
+        
+        const initialProgress = files.map(() => 0);
+        setFilesProgress(initialProgress);
 
-        await sendFileOverDataChannel(dataChannel, file, setProgress);
+        try {
+            await sendFilesOverDataChannel(
+                dataChannel,
+                files,
+                (fileIndex, progress) => {
+                    setCurrentFileIndex(fileIndex);
+                    setFilesProgress(prev => {
+                        const newProgress = [...prev];
+                        newProgress[fileIndex] = progress;
+                        return newProgress;
+                    });
+                },
+                (fileIndex) => {
+                    console.log(`File ${fileIndex + 1} complete`);
+                }
+            );
 
-        setState("complete");
+            console.log("All files sent successfully");
+            setState("complete");
+            setCurrentFileIndex(-1);
+        } catch (error) {
+            console.error("Error sending files:", error);
+            setState("error");
+        }
     }, [dataChannel]);
 
     const resetTransfer = useCallback(() => {
         setState("idle");
-        setProgress(0);
+        setFilesProgress([]);
+        setCurrentFileIndex(-1);
     }, []);
     
     return {
-        sendFile,
-        progress,
+        sendFiles,
+        filesProgress,
+        currentFileIndex,
         state,
         dataChannelReady: !!dataChannel && dataChannel.readyState === "open",
         resetTransfer

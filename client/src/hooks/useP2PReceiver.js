@@ -1,24 +1,29 @@
 import { useEffect, useState, useRef } from "react";
 import { createPeerConnection } from "../webrtc/createPeerConnection.js";
-import { createFileReceiver } from "../webrtc/fileReceiver.js";
+import createMultiFileReceiver from "../webrtc/fileReceiver.js";
 
 export function useP2PReceiver(socket, roomId) {
     const [pc, setPc] = useState(null);
-    const [progress, setProgress] = useState(0);
     const [status, setStatus] = useState("idle");
+    
+    // Multi-file state
+    const [filesMetadata, setFilesMetadata] = useState([]);
+    const [filesProgress, setFilesProgress] = useState([]);
+    const [completedFiles, setCompletedFiles] = useState([]);
     
     const pendingCandidatesRef = useRef([]);
 
     useEffect(() => {
         if (!socket || !roomId) {
-            // Clean up when roomId is cleared (reset)
             setPc(null);
             setStatus("idle");
-            setProgress(0);
+            setFilesMetadata([]);
+            setFilesProgress([]);
+            setCompletedFiles([]);
             return;
         }
 
-        console.log("Receiver: Setting up peer connection for room:", roomId);
+        console.log("Receiver: Setting up peer connection");
 
         const peer = createPeerConnection({
             onIceCandidate: (candidate) => {
@@ -28,27 +33,69 @@ export function useP2PReceiver(socket, roomId) {
 
         setPc(peer);
 
-        const handleData = createFileReceiver(
-            (p) => { setProgress(p); setStatus("receiving"); },
-            (blob, filename) => {
+        const handleData = createMultiFileReceiver(
+            // onBatchMetadata - called once with all file info
+            (filesInfo) => {
+                console.log('📦 UI: Received metadata for', filesInfo.length, 'files');
+                setFilesMetadata(filesInfo);
+                setFilesProgress(filesInfo.map(() => 0));
+                setCompletedFiles([]);
+                setStatus("receiving");
+            },
+            // onProgress - update specific file's progress
+            (fileIndex, progress) => {
+                setFilesProgress(prev => {
+                    const newProgress = [...prev];
+                    newProgress[fileIndex] = progress;
+                    return newProgress;
+                });
+            },
+            // onFileComplete - file finished, auto-download
+            (fileIndex, blob, filename) => {
+                console.log(`✅ UI: File ${fileIndex} complete: ${filename}`);
+                
+                // Auto-download
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url;
                 a.download = filename;
+                document.body.appendChild(a);  // ✅ FIXED: Append to body first
                 a.click();
-                URL.revokeObjectURL(url);
+                document.body.removeChild(a);  // ✅ FIXED: Clean up
+                
+                // Revoke after a delay to ensure download starts
+                setTimeout(() => URL.revokeObjectURL(url), 100);
+
+                setCompletedFiles(prev => [...prev, fileIndex]);
+            },
+            // onAllComplete - all files done
+            () => {
+                console.log('🎉 UI: All files transfer complete!');
                 setStatus("complete");
             }
         );
 
         peer.ondatachannel = (e) => {
             console.log("Receiver: Data channel received");
-            e.channel.onmessage = (event) => handleData(event.data);
-            e.channel.onopen = () => console.log("Receiver: Data channel open");
-            e.channel.onerror = (error) => console.error("Receiver: Data channel error", error);
+            const channel = e.channel;
+            
+            channel.onmessage = (event) => handleData(event.data);
+            
+            channel.onopen = () => {
+                console.log("Receiver: Data channel OPEN");
+                setStatus("connected");
+            };
+            
+            channel.onerror = (error) => {
+                console.error("Receiver: Data channel ERROR", error);
+                setStatus("error");
+            };
+            
+            channel.onclose = () => {
+                console.log("Receiver: Data channel CLOSED");
+            };
         };
 
-        // Receiver listens for OFFER and creates ANSWER
         socket.on("webrtc-offer", async ({ offer }) => {
             try {
                 console.log("Receiver: Received offer");
@@ -61,7 +108,7 @@ export function useP2PReceiver(socket, roomId) {
                 console.log("Receiver: Answer sent");
                 
                 // Process queued ICE candidates
-                console.log(`Receiver: Processing ${pendingCandidatesRef.current.length} pending ICE candidates`);
+                console.log(`Receiver: Processing ${pendingCandidatesRef.current.length} queued ICE candidates`);
                 for (const candidate of pendingCandidatesRef.current) {
                     try {
                         await peer.addIceCandidate(candidate);
@@ -72,6 +119,7 @@ export function useP2PReceiver(socket, roomId) {
                 pendingCandidatesRef.current = [];
             } catch (error) {
                 console.error("Receiver: Error handling offer:", error);
+                setStatus("error");
             }
         });
 
@@ -99,5 +147,10 @@ export function useP2PReceiver(socket, roomId) {
         };
     }, [socket, roomId]);
 
-    return { status, progress };
+    return { 
+        status,
+        filesMetadata,
+        filesProgress,
+        completedFiles
+    };
 }
