@@ -1,245 +1,185 @@
-import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react'
-import { useSocket } from '../provider/SocketContext';
-import ConnectionStatus from '../components/ConnectionStatus';
-import { motion } from 'framer-motion';
-import { CheckCircle, Download, Loader, XCircle, FileDown } from 'lucide-react';
+import { useState } from "react";
+import { useSocket } from "../provider/SocketContext.jsx";
+import { useP2PReceiver } from "../hooks/useP2PReceiver.js";
+import { motion, AnimatePresence } from "framer-motion";
+import ConnectionStatus from "../components/ConnectionStatus.jsx";
+import { CheckCircle, Download, Loader, FileDown, Inbox } from "lucide-react";
 
 const P2PReceive = () => {
-  const { socket, peerConnected, connected, roomId, setRoomId } = useSocket();
-
+  const { socket, connected, roomId, setRoomId, peerConnected } = useSocket();
   const [code, setCode] = useState("");
-  const [joining, setJoining] = useState(false);
 
-  const [fileMetadata, setFileMetadata] = useState(null);
-  const [transferStatus, setTransferStatus] = useState('idle');
-  const [transferProgress, setTransferProgress] = useState(null);
+  const {
+    status,
+    filesMetadata,
+    filesProgress,
+    completedFiles
+  } = useP2PReceiver(socket, roomId);
 
-  const chunksRef = useRef([]);
-  const receivedSizeRef = useRef(0);
-  const fileMetadataRef = useRef(null);
-
-  const peerConnection = useMemo(() => new RTCPeerConnection(), []);
-
-  // -------------------------
-  // Handle code input
-  // -------------------------
-  const handleCodeChange = (ev) => {
-    const cleaned = ev.target.value.replace(/[^0-9]/g, '').substring(0, 4);
-    setCode(cleaned);
+  const handleCodeChange = (e) => {
+    const clean = e.target.value.replace(/[^0-9]/g, "").slice(0, 4);
+    setCode(clean);
   };
 
-  // -------------------------
-  // Join a room
-  // -------------------------
   const handleJoinRoom = () => {
     if (!connected || code.length !== 4) return;
-    setJoining(true);
-    socket.emit('join-room', code);
+    socket.emit("join-room", code);
     setRoomId(code);
-    setJoining(false);
   };
 
-  // -------------------------
-  // Create DataChannel + Offer (Receiver)
-  // -------------------------
-  const handleCreateOffer = async () => {
-    try {
-      const channel = peerConnection.createDataChannel("file-channel");
-      setTransferStatus("idle");
-
-      // Store channel to state if needed later
-      channel.onopen = () => console.log("Receiver: DataChannel OPEN");
-
-      channel.onmessage = (event) => {
-        // Receiving file
-        setTransferStatus("receiving");
-
-        // TEXT MESSAGE → Metadata
-        if (typeof event.data === "string") {
-          try {
-            const meta = JSON.parse(event.data);
-            if (meta.type === "metadata") {
-              setFileMetadata(meta);
-              fileMetadataRef.current = meta;
-              return;
-            }
-          } catch {
-            return;
-          }
-        }
-
-        // BINARY DATA → chunks
-        if (event.data instanceof ArrayBuffer) {
-          const chunk = event.data;
-          chunksRef.current.push(chunk);
-          receivedSizeRef.current += chunk.byteLength;
-
-          // Progress bar
-          const prog = (receivedSizeRef.current / fileMetadataRef.current.size) * 100;
-          setTransferProgress(prog.toFixed(2));
-
-          // Completed
-          if (receivedSizeRef.current >= fileMetadataRef.current.size) {
-            const blob = new Blob(chunksRef.current, { type: "application/octet-stream" });
-            const url = URL.createObjectURL(blob);
-
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = fileMetadataRef.current.name;
-            a.click();
-
-            URL.revokeObjectURL(url);
-
-            // Reset
-            chunksRef.current = [];
-            receivedSizeRef.current = 0;
-            setFileMetadata(null);
-            fileMetadataRef.current = null;
-            setTransferStatus("complete");
-          }
-        }
-      };
-
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      socket.emit("webrtc-offer", { offer });
-
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // -------------------------
-  // Auto-create offer after peer connects
-  // -------------------------
-  useEffect(() => {
-    if (socket && peerConnected) {
-      handleCreateOffer();
-    }
-  }, [socket, peerConnected]);
-
-  // -------------------------
-  // Handle WebRTC Answer
-  // -------------------------
-  const handleOfferAnswer = useCallback(async ({ answer }) => {
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-  }, []);
-
-  // -------------------------
-  // ICE Candidates, Listeners
-  // -------------------------
-  useEffect(() => {
-    if (!socket) return;
-
-    socket.on("peer-connected", () => console.log("Receiver: Peer connected"));
-
-    peerConnection.onicecandidate = (e) => {
-      if (e.candidate) socket.emit("webrtc-ice-candidate", { candidate: e.candidate });
-    };
-
-    const handleICE = ({ candidate }) => {
-      if (candidate) peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    };
-
-    socket.on("webrtc-answer", handleOfferAnswer);
-    socket.on("webrtc-ice-candidate", handleICE);
-
-    return () => {
-      socket.off("webrtc-answer", handleOfferAnswer);
-      socket.off("webrtc-ice-candidate", handleICE);
-    };
-  }, [socket]);
-
-  // -------------------------
-  // UI
-  // -------------------------
   return (
-    <div className="flex flex-col items-center max-w-xl mx-auto">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="text-center mb-8">
+    <div className="flex flex-col items-center max-w-2xl mx-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-center mb-8"
+      >
         <h1 className="text-3xl font-bold mb-2">Receive Files</h1>
-        <p className="text-gray-600">Enter the 4-digit code to connect to the sender.</p>
+        <p className="text-gray-600">
+          Enter the 4-digit code to connect and receive files.
+        </p>
       </motion.div>
 
-      <div className="card w-full p-4">
-        <ConnectionStatus connected={connected} roomId={roomId} peerConnected={peerConnected} />
+      <div className="card w-full p-6">
+        <ConnectionStatus
+          connected={connected}
+          roomId={roomId}
+          peerConnected={peerConnected}
+        />
 
-        {/* Enter Code Screen */}
-        {!roomId && (
+        {!roomId ? (
           <div className="mt-8 space-y-6">
-            <div className='space-y-2'>
-              <label className="block text-sm font-medium">Enter the code</label>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Enter Code</label>
               <input
                 type="text"
                 maxLength={4}
-                className="input text-center text-2xl tracking-widest font-bold w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2   focus:ring-blue-400 focus:border-transparent placeholder-gray-400"
+                className="w-full text-center text-2xl tracking-widest font-bold px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
                 value={code}
                 onChange={handleCodeChange}
-                placeholder="Enter code"
+                placeholder="0000"
               />
             </div>
 
             <button
-              className="bg-(--accent-500) w-full py-2 rounded-lg text-white text-lg cursor-pointer disabled:cursor-not-allowed disabled:bg-blue-300"
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white py-3 rounded-lg font-medium"
               disabled={code.length !== 4}
               onClick={handleJoinRoom}
             >
               Connect
             </button>
           </div>
-        )}
-
-        {/* Connected, waiting or receiving */}
-        {roomId && (
-          <div className="mt-8 space-y-6 text-center">
-
+        ) : (
+          <div className="mt-8 space-y-6">
+            {/* Waiting for peer to connect */}
             {!peerConnected && (
-              <div className="flex justify-center">
-                <Loader className="h-6 w-6 animate-spin text-gray-500" />
+              <div className="text-center space-y-3">
+                <Loader className="h-12 w-12 animate-spin text-blue-400 mx-auto" />
+                <p className="font-medium text-lg">Connecting to sender...</p>
+                <p className="text-sm text-gray-500">Room: {roomId}</p>
               </div>
             )}
 
-            {peerConnected && transferStatus === "idle" && (
-              <div className="space-y-3">
-                <Download className="h-10 w-10 text-secondary-500 mx-auto" />
-                <p className="font-medium">Waiting for sender to choose a file...</p>
-              </div>
-            )}
-
-            {peerConnected && transferStatus === "receiving" && fileMetadata && (
-              <div className="space-y-5">
-                <div className="border rounded-lg p-4 flex items-center gap-3">
-                  <FileDown className="h-6 w-6 text-secondary-500" />
-                  <div className="text-left">
-                    <p className="font-medium">{fileMetadata.name}</p>
-                    <p className="text-sm text-gray-500">{(fileMetadata.size / 1024 / 1024).toFixed(2)} MB</p>
-                  </div>
-                </div>
-
+            {/* Peer connected but no files yet */}
+            {peerConnected && status === "idle" && filesMetadata.length === 0 && (
+              <div className="text-center space-y-4">
+                <Inbox className="h-16 w-16 text-gray-400 mx-auto" />
                 <div>
-                  <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
-                    <div
-                      className="bg-secondary-500 h-2 rounded-full transition-all"
-                      style={{ width: `${transferProgress}%` }}
-                    ></div>
-                  </div>
-
-                  <p className="text-sm text-gray-500 mt-2">{transferProgress}%</p>
+                  <p className="font-medium text-lg">Waiting for sender...</p>
+                  <p className="text-sm text-gray-500">Ready to receive files</p>
                 </div>
               </div>
             )}
 
-            {peerConnected && transferStatus === "complete" && (
-              <div className="text-success-500 space-y-3">
-                <CheckCircle className="h-10 w-10 mx-auto" />
-                <p className="font-medium text-lg">File received successfully!</p>
-                <p className="text-sm text-gray-500">The file has been downloaded.</p>
+            {/* Peer connected and status is "connected" but no metadata */}
+            {peerConnected && (status === "connected" || status === "receiving") && filesMetadata.length === 0 && (
+              <div className="text-center space-y-4">
+                <Loader className="h-12 w-12 animate-spin text-blue-600 mx-auto" />
+                <div>
+                  <p className="font-medium text-lg">Preparing to receive...</p>
+                  <p className="text-sm text-gray-500">Sender is preparing files</p>
+                </div>
               </div>
             )}
 
-            {transferStatus === "error" && (
-              <div className="text-error-500 space-y-3">
-                <XCircle className="h-10 w-10 mx-auto" />
-                <p className="font-medium text-lg">Failed to receive file</p>
+            {/* Show all files when metadata arrives */}
+            {filesMetadata.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-semibold text-lg">
+                    Incoming Files ({filesMetadata.length})
+                  </h3>
+                  {status === "complete" && (
+                    <span className="text-green-600 flex items-center gap-1">
+                      <CheckCircle className="h-5 w-5" />
+                      All received
+                    </span>
+                  )}
+                </div>
+
+                <AnimatePresence>
+                  {filesMetadata.map((file, index) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      className={`border rounded-lg p-4 ${
+                        completedFiles.includes(index) 
+                          ? 'bg-green-50 border-green-300' 
+                          : 'bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3 flex-1">
+                          <FileDown className="h-6 w-6 text-blue-500" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{file.name}</p>
+                            <p className="text-sm text-gray-500">
+                              {(file.size / 1024 / 1024).toFixed(2)} MB
+                            </p>
+                          </div>
+                        </div>
+
+                        <div>
+                          {completedFiles.includes(index) ? (
+                            <CheckCircle className="h-6 w-6 text-green-600" />
+                          ) : filesProgress[index] > 0 ? (
+                            <span className="text-blue-600 font-medium">
+                              {filesProgress[index].toFixed(0)}%
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 text-sm">Waiting...</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full transition-all ${
+                            completedFiles.includes(index) 
+                              ? 'bg-green-600' 
+                              : 'bg-blue-600'
+                          }`}
+                          style={{ width: `${filesProgress[index] || 0}%` }}
+                        />
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {status === "complete" && (
+              <div className="bg-green-50 border border-green-300 rounded-lg p-4 text-center">
+                <CheckCircle className="h-10 w-10 text-green-600 mx-auto mb-2" />
+                <p className="font-semibold text-lg text-green-900">
+                  All files received!
+                </p>
+                <p className="text-sm text-green-700">
+                  {completedFiles.length} file{completedFiles.length > 1 ? 's' : ''} downloaded
+                </p>
               </div>
             )}
           </div>

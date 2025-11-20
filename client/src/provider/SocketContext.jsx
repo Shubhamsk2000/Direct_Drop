@@ -1,4 +1,4 @@
-import { useContext, createContext, useEffect, useState, useMemo, useRef } from "react";
+import { useContext, createContext, useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { io } from 'socket.io-client';
 
 const SocketContext = createContext(null);
@@ -8,7 +8,7 @@ export const SocketProvider = ({ children }) => {
 
     const [peerConnected, setPeerConnected] = useState(false);
     const [connected, setConnected] = useState(false);
-    const [error, setError] = useState("");
+    const [connectionError, setConnectionError] = useState("");
     const [roomId, setRoomId] = useState(null);
 
     useEffect(() => {
@@ -20,32 +20,53 @@ export const SocketProvider = ({ children }) => {
         socketRef.current = socket;
 
         const onPeerConnected = () => setPeerConnected(true);
-        const onConnect = () =>{
+        const onConnect = () => {
             setConnected(true);
             setPeerConnected(false);
-        } 
+        }
+        const onDisconnect = () => {
+            setConnected(false);
+            setPeerConnected(false);
+            setRoomId(null);
+        }
         const onError = (arg) => setError(arg);
 
         socket.on('peer-connected', onPeerConnected);
         socket.on('connect', onConnect);
         socket.on('error', onError);
+        socket.on('disconnect', onDisconnect);
 
         return () => {
             socket.off('peer-connected', onPeerConnected);
             socket.off('connect', onConnect);
             socket.off('error', onError);
+            socket.off('disconnect', onDisconnect);
+            socket.close();
         };
     }, []);
+
     const socket = socketRef.current;
 
+    const resetRoom = useCallback(() => {
+        setRoomId(null);
+        setPeerConnected(false);
+        setConnectionError("");
+    }, []);
+    
+    const clearError = useCallback(() => {
+        setConnectionError("");
+    }, []);
+    
     const values = useMemo(() => ({
         socket,
         peerConnected,
         connected,
-        error,
+        connectionError,
         roomId,
-        setRoomId
-    }), [socket, connected, peerConnected, error, roomId]);
+        setRoomId,
+        resetRoom,
+        clearError,
+    }), [socket, connected, peerConnected, connectionError, roomId, resetRoom, clearError]);
 
     return (
         <SocketContext.Provider value={values}>
@@ -55,5 +76,9 @@ export const SocketProvider = ({ children }) => {
 };
 
 export const useSocket = () => {
-    return useContext(SocketContext);
+    const ct = useContext(SocketContext);
+    if (!ct) {
+        throw new Error("useSocket must be used inside SocketProvider");
+    }
+    return ct;
 };

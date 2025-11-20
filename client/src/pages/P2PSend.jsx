@@ -1,278 +1,270 @@
-import ConnectionStatus from '../components/ConnectionStatus';
-import { useSocket } from '../provider/SocketContext'
-import { useCallback, useState, useEffect, useMemo, useRef } from 'react';
-import { motion } from 'framer-motion';
-import { CheckCircle, FileUp, RefreshCw } from 'lucide-react';
+import { useState, useRef, useEffect } from "react";
+import { useSocket } from "../provider/SocketContext.jsx";
+import { useP2PSender } from "../hooks/useP2PSender.js";
+import { motion, AnimatePresence } from "framer-motion";
+import ConnectionStatus from "../components/ConnectionStatus.jsx";
+import { CheckCircle, FileUp, RefreshCw, X, Send, Loader } from "lucide-react";
 
 const P2PSend = () => {
-  const { socket, peerConnected, connected, setRoomId, roomId } = useSocket();
-  const [dataChannel, setDataChannel] = useState(null);
-  const [file, setFile] = useState(null);
+  const { socket, roomId, setRoomId, connected, peerConnected } = useSocket();
   const [generatingCode, setGeneratingCode] = useState(false);
-  const [transferProgress, setTransferProgress] = useState(null);
-  const [transferState, setTransferState] = useState('idle');
+  const [files, setFiles] = useState([]);
+
   const fileInputRef = useRef(null);
 
-  const peerConnection = useMemo(() => new RTCPeerConnection(), []);
+  const {
+    sendFiles,
+    filesProgress,
+    currentFileIndex,
+    state: transferState,
+    dataChannelReady,
+    resetTransfer
+  } = useP2PSender(socket, roomId);
 
-  const handleFileChange = (ev) => {
-    const file = ev.target.files?.[0] || null;
-    setFile(file);
-    setTransferState('idle');
-    setTransferProgress(null);
-  }
-
-  const triggerFileInput = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click();
-    }
+  const handleReset = () => {
+    setFiles([]);
+    resetTransfer();
   };
-  const handleCreateRoom = useCallback(() => {
-    if (roomId) return;
 
+  const handleCreateRoom = () => {
+    if (!connected || roomId) return;
     setGeneratingCode(true);
-    socket.emit('create-room');
-    console.log("room creating ")
-  }, [socket]);
-
-  const onGeneratedCode = useCallback((arg) => {
-    setRoomId(arg);
-    console.log(arg);
-    setGeneratingCode(false);
-  }, []);
-
-  const handleReceiveOffer = useCallback(async ({ offer }) => {
-    try {
-      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-
-      const answer = await peerConnection.createAnswer();
-
-      await peerConnection.setLocalDescription(answer);
-
-      console.log("Sending answer...");
-      socket.emit('webrtc-answer', { answer });
-    } catch (error) {
-      console.log(error.message)
-    }
-  }, []);
-
+    socket.emit("create-room");
+  };
 
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('webrtc-offer', handleReceiveOffer);
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('webrtc-ice-candidate', { candidate: event.candidate });
-      }
+    const handleGenerated = (code) => {
+      setRoomId(code);
+      setGeneratingCode(false);
     };
 
-    peerConnection.ondatachannel = (event) => {
-      const channel = event.channel;
-      channel.onopen = () => {
-        channel.bufferedAmountLowThreshold = 64 * 1024;
-        console.log("Sender: Data channel OPEN");
-      }
-      channel.onmessage = (event) => console.log("Sender: Msg:", event.data);
+    socket.on("generated-code", handleGenerated);
+    return () => socket.off("generated-code", handleGenerated);
+  }, [socket, setRoomId]);
 
-      setDataChannel(channel);
+  const handleFileChange = (e) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    setFiles(selectedFiles);
+  };
+
+  const removeFile = (index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const triggerFileInput = () => fileInputRef.current?.click();
+
+  const handleSend = () => {
+    if (files.length === 0) {
+      console.warn("No files selected");
+      return;
     }
-
-    const handleReceiveICECaandidate = async ({ candidate }) => {
-      try {
-        if (candidate) {
-          peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-      } catch (error) {
-        console.log(error.message);
-      }
-    };
-
-    socket.on('webrtc-ice-candidate', handleReceiveICECaandidate);
-    socket.on('generated-code', onGeneratedCode);
-    socket.on('peer-connected', () => {
-      console.log("connected to room");
-    })
-    return () => {
-      socket.off('webrtc-offer', handleReceiveOffer);
-      socket.off('generated-code');
-      socket.off('peer-connected');
-      socket.off('webrtc-ice-candidate', handleReceiveICECaandidate);
+    
+    if (!dataChannelReady) {
+      console.warn("Data channel not ready");
+      alert("Connection not ready. Please wait...");
+      return;
     }
-  }, [socket, peerConnection]);
-
-  const handleSendFile = async () => {
-    if(transferState === 'sending') return;
-    setTransferState('sending');
-    setTransferProgress(0);
-    try {
-      if (dataChannel && dataChannel.readyState === 'open' && file) {
-        const metadata = {
-          type: 'metadata',
-          name: file.name,
-          size: file.size
-        };
-        dataChannel.send(JSON.stringify(metadata));
-
-        const CHUNK_SIZE = 64 * 1024; //64KB
-        let offset = 0;
-
-        console.log(`Sending file: ${file.name}, size: ${file.size}`);
-
-        while (offset < file.size) {
-          const slice = file.slice(offset, offset + CHUNK_SIZE);
-          const buffer = await slice.arrayBuffer();
-
-          while (dataChannel.bufferedAmount > 512 * 1024) {
-            await new Promise((resolve) => {
-              dataChannel.onbufferedamountlow = () => resolve();
-            });
-          }
-
-          dataChannel.send(buffer);
-          offset += buffer.byteLength;
-
-          setTransferProgress(((offset / file.size) * 100));
-          console.log(`Sent: ${((offset / file.size) * 100).toFixed(2)}%`);
-        }
-        console.log("🟩 File sending Completed..");
-      }
-      setTransferState("complete");
-    } catch (error) {
-      console.log("Error in handleSendFile :", error.message);
-      setTransferState("idle");
-    }
+    
+    console.log("Starting file transfer");
+    sendFiles(files);
   };
 
   return (
-    <div className="flex flex-col items-center max-w-xl mx-auto">
+    <div className="flex flex-col items-center max-w-2xl mx-auto">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
         className="text-center mb-8"
       >
         <h1 className="text-3xl font-bold mb-2">Send Files</h1>
         <p className="text-gray-600">
-          Generate a code, share it with the receiver, and send your files once connected.
+          Generate a code, share it, and send multiple files at once!
         </p>
       </motion.div>
 
-      <div className="card w-full p-4">
+      <div className="card w-full p-6">
         <ConnectionStatus
           connected={connected}
           roomId={roomId}
           peerConnected={peerConnected}
         />
 
-        {
-          !roomId ? (
-            <div className='mt-8 flex flex-col items-center'>
-              <button
-                className='bg-(--accent-500) px-6 py-2 text-lg rounded-lg text-white cursor-pointer'
-                disabled={!connected || generatingCode}
-                onClick={handleCreateRoom}
-              >
-                {
-                  generatingCode ? (
-                    <>
-                      {console.log(roomId)}
-                      <RefreshCw className='w-5 h-5 animate-spin' />
-                      Generating code
-                    </>
+        {!roomId ? (
+          <div className="mt-8 flex flex-col items-center">
+            <button
+              className="bg-blue-600 hover:bg-blue-700 px-6 py-3 text-lg rounded-lg text-white disabled:bg-blue-300"
+              disabled={!connected || generatingCode}
+              onClick={handleCreateRoom}
+            >
+              {generatingCode ? (
+                <>
+                  <RefreshCw className="w-5 h-5 animate-spin inline mr-2" />
+                  Generating...
+                </>
+              ) : (
+                "Generate Code"
+              )}
+            </button>
+          </div>
+        ) : (
+          <div className="mt-8 space-y-6">
+            {peerConnected ? (
+              <>
+                <div className="flex items-center justify-center gap-2 text-green-600">
+                  <CheckCircle className="h-6 w-6" />
+                  <span className="font-medium">Connected to receiver</span>
+                </div>
+
+                {/* File Selection Area */}
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    multiple
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+
+                  {files.length === 0 ? (
+                    <div className="text-center space-y-4">
+                      <FileUp className="h-12 w-12 text-gray-400 mx-auto" />
+                      <div>
+                        <p className="text-lg font-medium">Choose files to send</p>
+                        <p className="text-sm text-gray-500">Select multiple files at once</p>
+                      </div>
+                      <button
+                        onClick={triggerFileInput}
+                        className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
+                      >
+                        Select Files
+                      </button>
+                    </div>
                   ) : (
-                    <>Generate Code</>
-                  )
-                }
-              </button>
-            </div>
-          ) : (
-            <div className='mt-8'>
-              {
-                peerConnected && (
-                  <div className='space-y-6'>
-                    <div className="flex items-center justify-center gap-2 text-success-500">
-                      <CheckCircle className="h-6 w-6" />
-                      <span className="font-medium">Connected to receiver</span>
-                    </div>
-
-                    <div className='border-2 border-dashed border-gray-200 rounded-lg p-8 text-center'>
-                      {file ? (
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-center gap-2 ">
-                            <FileUp className="h-6 w-6 text-primary-500" />
-                            <span className="font-medium text-lg wrap-break-word w-full">{file.name}</span>
-                          </div>
-                          <p className="text-gray-500 text-sm">
-                            {(file.size / 1024 / 1024).toFixed(2)} MB
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          <p className="text-lg font-medium">Drag & drop a file or click to browse</p>
-                          <p className="text-gray-500">Select the file you want to send</p>
-                        </div>
-                      )}
-
-                      <input
-                        type="file"
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        className="hidden"
-                      />
-
-                      {!file && (
-                        <button
-                          onClick={triggerFileInput}
-                          className="mt-4 btn-outline cursor-pointer"
-                        >
-                          Select File
-                        </button>
-                      )}
-                    </div>
-
-                    {
-                      file && transferState === 'idle' && (
-                        <div className="flex justify-center">
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="font-semibold text-lg">
+                          {files.length} file{files.length > 1 ? 's' : ''} selected
+                        </h3>
+                        {(transferState === "idle" || transferState === "ready") && (
                           <button
-                            onClick={handleSendFile}
-                            className='bg-(--accent-500) px-4 py-2 rounded-lg text-white cursor-pointer '
+                            onClick={triggerFileInput}
+                            className="text-sm text-blue-600 hover:underline"
                           >
-                            send File
+                            Add more
                           </button>
-                        </div>
-                      )
-                    }
-                    {
-                      file && transferState === 'sending' && (
-                        <div className="w-full bg-gray-200 h-2 rounded-xl overflow-hidden">
-                          <div
-                            className="h-2  bg-green-600 rounded-2xl transition-all"
-                            style={{ width: `${transferProgress}%` }}
-                          />
-                        </div>
-                      )
-                    }
+                        )}
+                      </div>
 
-                    {
-                      file && transferState === 'complete' && (
-                        <div>
-                          File Transfered Successfully !
-                        </div>
-                      )
-                    }
+                      <AnimatePresence>
+                        {files.map((file, index) => (
+                          <motion.div
+                            key={index}
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 20 }}
+                            className="border rounded-lg p-4"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-3 flex-1">
+                                <FileUp className="h-5 w-5 text-blue-500" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium truncate">{file.name}</p>
+                                  <p className="text-sm text-gray-500">
+                                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                                  </p>
+                                </div>
+                              </div>
 
+                              {(transferState === "idle" || transferState === "ready") && (
+                                <button
+                                  onClick={() => removeFile(index)}
+                                  className="text-red-500 hover:bg-red-50 p-1 rounded"
+                                >
+                                  <X className="h-5 w-5" />
+                                </button>
+                              )}
+
+                              {transferState === "sending" && (
+                                <div className="flex items-center gap-2">
+                                  {index === currentFileIndex ? (
+                                    <span className="text-blue-600 text-sm font-medium">
+                                      Sending...
+                                    </span>
+                                  ) : filesProgress[index] === 100 ? (
+                                    <CheckCircle className="h-5 w-5 text-green-600" />
+                                  ) : (
+                                    <span className="text-gray-400 text-sm">Waiting</span>
+                                  )}
+                                </div>
+                              )}
+
+                              {transferState === "complete" && (
+                                <CheckCircle className="h-5 w-5 text-green-600" />
+                              )}
+                            </div>
+
+                            {/* Progress bar */}
+                            {transferState === "sending" && (
+                              <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                                <div
+                                  className={`h-2 rounded-full transition-all ${
+                                    index === currentFileIndex ? 'bg-blue-600' : 'bg-green-600'
+                                  }`}
+                                  style={{ width: `${filesProgress[index] || 0}%` }}
+                                />
+                              </div>
+                            )}
+                          </motion.div>
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                </div>
+
+                {/* Send Button - Fixed to show when ready OR idle */}
+                {files.length > 0 && (transferState === "idle" || transferState === "ready") && (
+                  <button
+                    onClick={handleSend}
+                    disabled={!dataChannelReady}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium flex items-center justify-center gap-2"
+                  >
+                    <Send className="h-5 w-5" />
+                    Send {files.length} file{files.length > 1 ? 's' : ''}
+                  </button>
+                )}
+
+                {/* Complete State */}
+                {transferState === "complete" && (
+                  <div className="text-center space-y-4">
+                    <div className="text-green-600 flex items-center justify-center gap-2">
+                      <CheckCircle className="h-8 w-8" />
+                      <span className="text-lg font-semibold">
+                        All files sent successfully!
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleReset}
+                      className="text-blue-600 hover:underline"
+                    >
+                      Send more files
+                    </button>
                   </div>
-                )
-              }
-
-            </div>
-          )
-        }
+                )}
+              </>
+            ) : (
+              <div className="text-center space-y-3">
+                <Loader className="h-12 w-12 text-blue-400 mx-auto animate-spin" />
+                <p className="font-medium text-lg">Waiting for receiver to join...</p>
+              
+              </div>
+            )}
+          </div>
+        )}
       </div>
-    </div >
-  )
-}
+    </div>
+  );
+};
 
-export default P2PSend
+export default P2PSend;
