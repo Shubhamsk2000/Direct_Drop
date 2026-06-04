@@ -59,9 +59,9 @@ export function useP2PReceiver(socket, roomId) {
                 const a = document.createElement("a");
                 a.href = url;
                 a.download = filename;
-                document.body.appendChild(a);  // ✅ FIXED: Append to body first
+                document.body.appendChild(a);  
                 a.click();
-                document.body.removeChild(a);  // ✅ FIXED: Clean up
+                document.body.removeChild(a); 
                 
                 // Revoke after a delay to ensure download starts
                 setTimeout(() => URL.revokeObjectURL(url), 100);

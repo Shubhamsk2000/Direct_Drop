@@ -27,7 +27,7 @@ export default async function sendFilesOverDataChannel(channel, files, setProgre
 
         channel.send(JSON.stringify({
             type: 'file-start',
-            fileIndex: fileIdx,  // ✅ FIXED: was fileIdx
+            fileIndex: fileIdx,  
         }));
 
         console.log(`📄 Starting file ${fileIdx + 1}/${files.length}: ${file.name}`);
@@ -38,7 +38,7 @@ export default async function sendFilesOverDataChannel(channel, files, setProgre
 
         channel.send(JSON.stringify({
             type: 'file-complete',
-            fileIndex: fileIdx,  // ✅ FIXED: was fileIdx
+            fileIndex: fileIdx,  
         }));
         console.log(`✅ File ${fileIdx + 1} complete`);
 

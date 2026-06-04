@@ -39,7 +39,7 @@ export function useP2PSender(socket, roomId) {
             console.log("Sender: DataChannel OPEN");
             channel.bufferedAmountLowThreshold = 64 * 1024;
             setDataChannel(channel);
-            setState("ready");  // ✅ ADDED: Set state to ready
+            setState("ready");  
         };
 
         channel.onclose = () => {
@@ -50,7 +50,7 @@ export function useP2PSender(socket, roomId) {
 
         channel.onerror = (error) => {
             console.error("Sender: DataChannel ERROR", error);
-            setState("error");  // ✅ ADDED: Set error state
+            setState("error"); 
         };
 
         socket.on("webrtc-answer", async ({ answer }) => {

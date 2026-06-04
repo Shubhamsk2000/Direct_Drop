@@ -94,7 +94,7 @@ const P2PSend = () => {
         {!roomId ? (
           <div className="mt-8 flex flex-col items-center">
             <button
-              className="bg-blue-600 hover:bg-blue-700 px-6 py-3 text-lg rounded-lg text-white disabled:bg-blue-300"
+              className="bg-blue-600 hover:bg-blue-700 px-6 py-3 text-lg rounded-lg text-white disabled:bg-blue-300 cursor-pointer"
               disabled={!connected || generatingCode}
               onClick={handleCreateRoom}
             >
