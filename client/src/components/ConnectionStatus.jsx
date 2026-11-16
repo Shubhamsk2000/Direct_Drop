@@ -6,7 +6,8 @@ const ConnectionStatus = ({
     connected,
     roomId,
     peerConnected,
-    connectionError
+    connectionError,
+    isSender
 }) => {
     const { resetRoom } = useSocket();
     const [copied, setCopied] = useState(false);
@@ -32,7 +33,7 @@ const ConnectionStatus = ({
 
             {/* Header Row: Status on Left, Controls on Right */}
             <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-gray-100 shadow-sm">
-                
+
                 {/* Left: Connection Status */}
                 <div className="flex items-center gap-2 px-2">
                     {connected ? (
@@ -62,7 +63,7 @@ const ConnectionStatus = ({
                             </span>
                         </div>
 
-                        <button 
+                        <button
                             onClick={resetRoom}
                             title="Disconnect and Reset"
                             className="p-2 rounded-md cursor-pointer text-red-600 hover:bg-red-50 transition-all duration-200"
@@ -74,7 +75,7 @@ const ConnectionStatus = ({
             </div>
 
             {/* Large Copy Area (Only shows when waiting for peer) */}
-            {roomId && !peerConnected && (
+            {roomId && !peerConnected && isSender && (
                 <div className="p-8 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center hover:border-gray-300 transition-colors">
                     <div className="text-center space-y-4">
                         <div className="relative group">
@@ -82,13 +83,13 @@ const ConnectionStatus = ({
                                 <span className="text-5xl font-bold tracking-widest text-gray-800 font-mono select-all">
                                     {roomId}
                                 </span>
-                                
+
                                 <button
                                     onClick={handleCopy}
                                     className={`
-                                        p-3 rounded-xl transition-all duration-200 shadow-sm
-                                        ${copied 
-                                            ? "bg-green-500 text-white rotate-3 scale-110" 
+                                        p-3 rounded-xl transition-all duration-200 shadow-sm cursor-pointer
+                                        ${copied
+                                            ? "bg-green-500 text-white rotate-3 scale-110"
                                             : "bg-white text-gray-500 hover:text-gray-800 hover:shadow-md border border-gray-100"
                                         }
                                     `}
