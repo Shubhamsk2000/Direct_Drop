@@ -6,6 +6,7 @@ const P2P = () => {
 
   return (
     <div className="flex flex-col items-center">
+
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -28,8 +29,8 @@ const P2P = () => {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5, delay: 0.2 }}
         >
-          <Link 
-            to="/p2p/send" 
+          <Link
+            to="/p2p/send"
             className="flex flex-col items-center justify-center h-full p-10 transition-all border-2 border-transparent card send-card"
           >
             <div className="p-5 mb-6 transition-colors rounded-full icon-wrapper">
@@ -47,8 +48,8 @@ const P2P = () => {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5, delay: 0.3 }}
         >
-          <Link 
-            to="/p2p/receive" 
+          <Link
+            to="/p2p/receive"
             className="flex flex-col items-center justify-center h-full p-10 transition-all border-2 border-transparent card receive-card"
           >
             <div className="p-5 mb-6 transition-colors rounded-full icon-wrapper-secondary">

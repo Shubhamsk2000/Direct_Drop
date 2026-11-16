@@ -3,10 +3,10 @@ import { useSocket } from "../provider/SocketContext.jsx";
 import { useP2PSender } from "../hooks/useP2PSender.js";
 import { motion, AnimatePresence } from "framer-motion";
 import ConnectionStatus from "../components/ConnectionStatus.jsx";
-import { CheckCircle, FileUp, RefreshCw, X, Send, Loader } from "lucide-react";
+import { CheckCircle, FileUp, RefreshCw, X, Send, Loader, Ban } from "lucide-react";
 
 const P2PSend = () => {
-  const { socket, roomId, setRoomId, connected, peerConnected } = useSocket();
+  const { socket, roomId, setRoomId, connected, peerConnected, connectionError } = useSocket();
   const [generatingCode, setGeneratingCode] = useState(false);
   const [files, setFiles] = useState([]);
 
@@ -14,16 +14,34 @@ const P2PSend = () => {
 
   const {
     sendFiles,
+    cancelTransfer,
+    reconnect,
     filesProgress,
     currentFileIndex,
     state: transferState,
+    error: transferError,
     dataChannelReady,
-    resetTransfer
+    resetTransfer,
+    reconnectAttempt,
+    waitingForPeer,
+    maxReconnectAttempts,
+    canResume
   } = useP2PSender(socket, roomId);
+
+  // An interrupted batch keeps its progress on screen until it resumes or is discarded.
+  const showProgress = transferState === "sending" || transferState === "reconnecting" || canResume;
+  // Files can be edited whenever no batch is in flight or waiting to resume.
+  const canEditFiles = !["sending", "complete", "reconnecting"].includes(transferState) && !canResume;
 
   const handleReset = () => {
     setFiles([]);
     resetTransfer();
+  };
+
+  // Keep the selected files so the same batch can be retried.
+  const handleRetry = () => {
+    if (dataChannelReady) resetTransfer();
+    else reconnect();
   };
 
   const handleCreateRoom = () => {
@@ -60,13 +78,13 @@ const P2PSend = () => {
       console.warn("No files selected");
       return;
     }
-    
+
     if (!dataChannelReady) {
       console.warn("Data channel not ready");
       alert("Connection not ready. Please wait...");
       return;
     }
-    
+
     console.log("Starting file transfer");
     sendFiles(files);
   };
@@ -89,6 +107,8 @@ const P2PSend = () => {
           connected={connected}
           roomId={roomId}
           peerConnected={peerConnected}
+          connectionError={connectionError}
+          isSender={true}
         />
 
         {!roomId ? (
@@ -147,7 +167,7 @@ const P2PSend = () => {
                         <h3 className="font-semibold text-lg">
                           {files.length} file{files.length > 1 ? 's' : ''} selected
                         </h3>
-                        {(transferState === "idle" || transferState === "ready") && (
+                        {canEditFiles && (
                           <button
                             onClick={triggerFileInput}
                             className="text-sm text-blue-600 hover:underline"
@@ -177,7 +197,7 @@ const P2PSend = () => {
                                 </div>
                               </div>
 
-                              {(transferState === "idle" || transferState === "ready") && (
+                              {canEditFiles && (
                                 <button
                                   onClick={() => removeFile(index)}
                                   className="text-red-500 hover:bg-red-50 p-1 rounded"
@@ -186,9 +206,9 @@ const P2PSend = () => {
                                 </button>
                               )}
 
-                              {transferState === "sending" && (
+                              {showProgress && (
                                 <div className="flex items-center gap-2">
-                                  {index === currentFileIndex ? (
+                                  {transferState === "sending" && index === currentFileIndex ? (
                                     <span className="text-blue-600 text-sm font-medium">
                                       Sending...
                                     </span>
@@ -206,12 +226,11 @@ const P2PSend = () => {
                             </div>
 
                             {/* Progress bar */}
-                            {transferState === "sending" && (
+                            {showProgress && (
                               <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
                                 <div
-                                  className={`h-2 rounded-full transition-all ${
-                                    index === currentFileIndex ? 'bg-blue-600' : 'bg-green-600'
-                                  }`}
+                                  className={`h-2 rounded-full transition-all ${index === currentFileIndex ? 'bg-blue-600' : 'bg-green-600'
+                                    }`}
                                   style={{ width: `${filesProgress[index] || 0}%` }}
                                 />
                               </div>
@@ -223,7 +242,15 @@ const P2PSend = () => {
                   )}
                 </div>
 
-                {/* Send Button - Fixed to show when ready OR idle */}
+                {/* Connecting */}
+                {transferState === "connecting" && (
+                  <div className="flex items-center justify-center gap-2 text-gray-600">
+                    <Loader className="h-5 w-5 animate-spin" />
+                    <span>Establishing a direct connection…</span>
+                  </div>
+                )}
+
+                {/* Send Button */}
                 {files.length > 0 && (transferState === "idle" || transferState === "ready") && (
                   <button
                     onClick={handleSend}
@@ -233,6 +260,67 @@ const P2PSend = () => {
                     <Send className="h-5 w-5" />
                     Send {files.length} file{files.length > 1 ? 's' : ''}
                   </button>
+                )}
+
+                {/* Reconnecting: batch is suspended and will resume */}
+                {transferState === "reconnecting" && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center space-y-1">
+                    <p className="font-semibold text-blue-800 flex items-center justify-center gap-2">
+                      <Loader className="h-5 w-5 animate-spin" />
+                      {waitingForPeer
+                        ? "Connection interrupted — waiting…"
+                        : `Reconnecting… (attempt ${reconnectAttempt} of ${maxReconnectAttempts})`}
+                    </p>
+                    {transferError && <p className="text-sm text-blue-700">{transferError}</p>}
+                    <p className="text-sm text-gray-600">The transfer will continue where it left off.</p>
+                  </div>
+                )}
+
+                {/* Cancel Button */}
+                {(transferState === "sending" || transferState === "reconnecting") && (
+                  <button
+                    onClick={cancelTransfer}
+                    className="w-full border border-red-300 text-red-700 hover:bg-red-50 py-3 rounded-lg font-medium flex items-center justify-center gap-2"
+                  >
+                    <Ban className="h-5 w-5" />
+                    Cancel transfer
+                  </button>
+                )}
+
+                {/* Cancelled State */}
+                {transferState === "cancelled" && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 text-center space-y-2">
+                    <p className="font-semibold text-amber-800">Transfer cancelled</p>
+                    {transferError && <p className="text-sm text-amber-700">{transferError}</p>}
+                    <div className="flex justify-center gap-4">
+                      <button onClick={handleRetry} className="text-blue-600 hover:underline">
+                        Send again
+                      </button>
+                      <button onClick={handleReset} className="text-gray-600 hover:underline">
+                        Choose other files
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error State */}
+                {transferState === "error" && (
+                  <div className="bg-red-50 border border-red-300 rounded-lg p-4 text-center space-y-2">
+                    <p className="font-semibold text-red-800">
+                      {dataChannelReady ? "Transfer failed" : "Connection lost"}
+                    </p>
+                    {transferError && <p className="text-sm text-red-700">{transferError}</p>}
+                    <div className="flex justify-center gap-4">
+                      <button onClick={handleRetry} className="text-blue-600 hover:underline">
+                        {dataChannelReady ? "Try again" : canResume ? "Reconnect & resume" : "Reconnect"}
+                      </button>
+                      {files.length > 0 && (
+                        <button onClick={handleReset} className="text-gray-600 hover:underline">
+                          {canResume ? "Discard transfer" : "Clear files"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 )}
 
                 {/* Complete State */}
@@ -257,7 +345,10 @@ const P2PSend = () => {
               <div className="text-center space-y-3">
                 <Loader className="h-12 w-12 text-blue-400 mx-auto animate-spin" />
                 <p className="font-medium text-lg">Waiting for receiver to join...</p>
-              
+                {transferState === "error" && transferError && (
+                  <p className="text-sm text-red-600">Last transfer failed: {transferError}</p>
+                )}
+
               </div>
             )}
           </div>
