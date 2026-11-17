@@ -1,12 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import socketHanlder, { RECOVERY_WINDOW_MS } from './socketHandler.js';
 
-// Load .env when present (in production the vars come from the environment).
+// Load the .env next to this file when present, regardless of the directory
+// the process was started from (in production the vars may come from the environment).
 try {
-  process.loadEnvFile();
+  process.loadEnvFile(fileURLToPath(new URL('.env', import.meta.url)));
 } catch {}
 
 const PORT = process.env.PORT || 3000;
