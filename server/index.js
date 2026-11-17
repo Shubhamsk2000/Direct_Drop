@@ -3,7 +3,6 @@ import cors from 'cors';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import socketHanlder, { RECOVERY_WINDOW_MS } from './socketHandler.js';
-import socketHanlder, { RECOVERY_WINDOW_MS } from './socketHandler.js';
 
 // Load .env when present (in production the vars come from the environment).
 try {
